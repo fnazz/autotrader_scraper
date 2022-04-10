@@ -49,8 +49,8 @@ To update from an older version, the best way is to run `pip3 uninstall autotrad
 |-|-|-|-|-|
 | make | String | Make of the car | Get these from autotrader.co.uk\*. Examples are "Audi", "BMW", "Jaguar" |"BMW"|
 | model | String | Model of the car | Get these from autotrader.co.uk\*. Examples are "A3", "A4", "A4" for Audi |"5 SERIES"|
-| model_variant | String | Model Variant of the car | Get these from autotrader.co.uk\*. Examples are "S line", "Black Edition", "A4" for Audi |"5 SERIES"|
-| manufacturer_approved | String | Manufacturer Approved | Takes Y or blank |"default N"|
+| model_variant | String | Model Variant of the car | Get these from autotrader.co.uk\*. Examples are "S line", "Black Edition", "A4" for Audi |""|
+| manufacturer_approved | String | Manufacturer Approved | Takes Y or blank |""|
 | postcode | String | Postcode where you are searching | Example: "CB2 1TN", "NW1 2BH" | "SW1A 0AA" |
 | radius | Integer | Radius of your search from the postcode | Can be any positive integer. Use 1500 for nation-wide search | 1500 (i.e. nation-wide) |
 | min_year | Integer | Minimum year of the car's manufacture | Can be any positive integer | 1995 |
