@@ -1,177 +1,196 @@
-import requests
 import json
 import csv
+import logging
 from bs4 import BeautifulSoup
-import traceback
 import cloudscraper
 
-def get_cars(make="BMW", model="5 SERIES", postcode="SW1A 0AA", radius=1500, min_year=1995, max_year=1995, include_writeoff="include", max_attempts_per_page=5, verbose=False):
-
-	# To bypass Cloudflare protection
-	scraper = cloudscraper.create_scraper()
-
-	# Basic variables
-
-	results = []
-	n_this_year_results = 0
-
-	url = "https://www.autotrader.co.uk/results-car-search"
-
-	keywords = {}
-	keywords["mileage"] = ["miles"]
-	keywords["BHP"] = ["BHP"]
-	keywords["transmission"] = ["Automatic", "Manual"]
-	keywords["fuel"] = ["Petrol", "Diesel", "Electric", "Hybrid – Diesel/Electric Plug-in", "Hybrid – Petrol/Electric", "Hybrid – Petrol/Electric Plug-in"]
-	keywords["owners"] = ["owners"]
-	keywords["body"] = ["Coupe", "Convertible", "Estate", "Hatchback", "MPV", "Pickup", "SUV", "Saloon"]
-	keywords["ULEZ"] = ["ULEZ"]
-	keywords["year"] = [" reg)"]
-	keywords["engine"] = ["engine"]
-
-	# Set up parameters for query to autotrader.co.uk
-
-	params = {
-		"sort": "relevance",
-		"postcode": postcode,
-		"radius": radius,
-		"make": make,
-		"model": model,
-		"search-results-price-type": "total-price",
-		"search-results-year": "select-year",
-	}
-
-	if (include_writeoff == "include"):
-		params["writeoff-categories"] = "on"
-	elif (include_writeoff == "exclude"):
-		params["exclude-writeoff-categories"] = "on"
-	elif (include_writeoff == "writeoff-only"):
-		params["only-writeoff-categories"] = "on"
-		
-	year = min_year
-	page = 1
-	attempt = 1
+keywords = {"mileage": ["miles"],
+            "BHP": ["BHP"],
+            "transmission": ["Automatic", "Manual"],
+            "fuel": ["Petrol", "Diesel", "Electric", "Hybrid – Diesel/Electric Plug-in", "Hybrid – Petrol/Electric",
+                     "Hybrid – Petrol/Electric Plug-in"],
+            "owners": ["owners"],
+            "body": ["Coupe", "Convertible", "Estate", "Hatchback", "MPV", "Pickup", "SUV", "Saloon"],
+            "ULEZ": ["ULEZ"],
+            "year": [" reg)"],
+            "engine": ["engine"]}
 
 
-	try:
+def get_car_details(article):
+    car = {
+            "name": article.find("h3", {"class": "product-card-details__title"}).text.strip(),
+            "link": "https://www.autotrader.co.uk" + article.find("a", {"class": "tracking-standard-link"})["href"][: article.find("a", {"class": "tracking-standard-link"})["href"].find("?")],
+            "price": article.find("div", {"class": "product-card-pricing__price"}).text.strip().replace(",", ""),
+            "subtitle": article.find("p", {"class": "product-card-details__subtitle"}).text.strip().replace(",", ""),
+            "price-indicator": article.find("li", {"class": "badge-group__item"}).text.strip().replace(",", ""),
+            "seller-info":  article.find("h3", {"class": "product-card-seller-info__name atc-type-picanto"}).text.strip().replace(",", ""),
+        }
+    # print(car)
+    key_specs_bs_list = article.find("ul", {"class": "listing-key-specs"}).find_all("li")
 
-		while year <= max_year:
+    for key_spec_bs_li in key_specs_bs_list:
 
-			params["year-from"] = year
-			params["year-to"] = year
-			params["page"] = page
+        key_spec_bs = key_spec_bs_li.text
 
-			r = scraper.get(url, params=params)
-			if verbose:
-				print("Year:     ", year)
-				print("Page:     ", page)
-				print("Response: ", r)
+        if any(keyword in key_spec_bs for keyword in keywords["mileage"]):
+            car["mileage"] = int(key_spec_bs[:key_spec_bs.find(" miles")].replace(",", ""))
+        elif any(keyword in key_spec_bs for keyword in keywords["BHP"]):
+            car["BHP"] = int(key_spec_bs[:key_spec_bs.find("BHP")])
+        elif any(keyword in key_spec_bs for keyword in keywords["transmission"]):
+            car["transmission"] = key_spec_bs
+        elif any(keyword in key_spec_bs for keyword in keywords["fuel"]):
+            car["fuel"] = key_spec_bs
+        elif any(keyword in key_spec_bs for keyword in keywords["owners"]):
+            car["owners"] = int(key_spec_bs[:key_spec_bs.find(" owners")])
+        elif any(keyword in key_spec_bs for keyword in keywords["body"]):
+            car["body"] = key_spec_bs
+        elif any(keyword in key_spec_bs for keyword in keywords["ULEZ"]):
+            car["ULEZ"] = key_spec_bs
+        elif any(keyword in key_spec_bs for keyword in keywords["year"]):
+            car["year"] = key_spec_bs.split(' ')[0]
+        elif key_spec_bs[1] == "." and key_spec_bs[3] == "L":
+            car["engine"] = key_spec_bs
+        else:
+            logging.info(f'Unidentified information {key_spec_bs}')
 
-			try:
+    return car
 
-				if r.status_code != 200: # if not successful (e.g. due to bot protection), log as an attempt
-					attempt = attempt + 1
-					if attempt <= max_attempts_per_page:
-						if verbose:
-							print("Exception. Starting attempt #", attempt, "and keeping at page #", page)
-					else:
-						page = page + 1
-						attempt = 1
-						if verbose:
-							print("Exception. All attempts exhausted for this page. Skipping to next page #", page)
 
-				else:
+def get_page_html(url, scraper, params={}, max_attempts_per_page=5):
 
-					j = r.json()
-					s = BeautifulSoup(j["html"], features="html.parser")
+    attempt = 1
+    while attempt <= max_attempts_per_page:
 
-					articles = s.find_all("article", attrs={"data-standout-type":""})
+        r = scraper.get(url, params=params)
+        logging.info(f"Response: {r}")
 
-					# if no results or reached end of results...
-					if len(articles) == 0 or r.url[r.url.find("page=")+5:] != str(page):
-						if verbose:
-							print("Found total", n_this_year_results, "results for year", year, "across", page-1, "pages")
-							if year+1 <= max_year:
-								print("Moving on to year", year + 1)
-								print("---------------------------------")
+        if r.status_code == 200:
+            first_character = r.text[0]
+            if first_character == '{':
+                page_html = r.json()["html"]
+            elif first_character == '<':
+                page_html = r.text
+            else:
+                raise Exception(f'Unknown start to response from {r.url}: {r.text[:100]}')
+            s = BeautifulSoup(page_html, features="html.parser")
+            return s
 
-						# Increment year and reset relevant variables
-						year = year + 1
-						page = 1
-						attempt = 1
-						n_this_year_results = 0
-					else:
-						for article in articles:
-							car = {}
-							car["name"] = article.find("h3", {"class": "product-card-details__title"}).text.strip()				
-							car["link"] = "https://www.autotrader.co.uk" + article.find("a", {"class": "tracking-standard-link"})["href"][: article.find("a", {"class": "tracking-standard-link"})["href"].find("?")]
-							car["price"] = article.find("div", {"class": "product-card-pricing__price"}).text.strip()
+        else:  # if not successful (e.g. due to bot protection), log as an attempt
+            attempt = attempt + 1
+            logging.info(f"Exception. Starting attempt #{attempt} ")
 
-							key_specs_bs_list = article.find("ul", {"class": "listing-key-specs"}).find_all("li")
-							
-							for key_spec_bs_li in key_specs_bs_list:
+    logging.info(f"Exception. All attempts exhausted for this page. Skipping to next page")
 
-								key_spec_bs = key_spec_bs_li.text
+    return None
 
-								if any(keyword in key_spec_bs for keyword in keywords["mileage"]):
-									car["mileage"] = int(key_spec_bs[:key_spec_bs.find(" miles")].replace(",",""))
-								elif any(keyword in key_spec_bs for keyword in keywords["BHP"]):
-									car["BHP"] = int(key_spec_bs[:key_spec_bs.find("BHP")])
-								elif any(keyword in key_spec_bs for keyword in keywords["transmission"]):
-									car["transmission"] = key_spec_bs
-								elif any(keyword in key_spec_bs for keyword in keywords["fuel"]):
-									car["fuel"] = key_spec_bs
-								elif any(keyword in key_spec_bs for keyword in keywords["owners"]):
-									car["owners"] = int(key_spec_bs[:key_spec_bs.find(" owners")])
-								elif any(keyword in key_spec_bs for keyword in keywords["body"]):
-									car["body"] = key_spec_bs
-								elif any(keyword in key_spec_bs for keyword in keywords["ULEZ"]):
-									car["ULEZ"] = key_spec_bs
-								elif any(keyword in key_spec_bs for keyword in keywords["year"]):
-									car["year"] = key_spec_bs
-								elif key_spec_bs[1] == "." and key_spec_bs[3] == "L":
-									car["engine"] = key_spec_bs
 
-							results.append(car)
-							n_this_year_results = n_this_year_results + 1
+def get_cars(make="BMW", model="5 SERIES", postcode="SW1A 0AA", radius=1500, min_year=1995, max_year=1995, model_variant="",manufacturer_approved="",
+             include_writeoff="include", max_attempts_per_page=5, verbose=False):
+    if verbose:
+        log_level = logging.INFO
+    else:
+        log_level = logging.WARNING
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=log_level)
 
-						page = page + 1
-						attempt = 1
+    # To bypass Cloudflare protection
+    scraper = cloudscraper.create_scraper()
 
-						if verbose:
-							print("Car count: ", len(results))
-							print("---------------------------------")
+    # Basic variables
 
-			except KeyboardInterrupt:
-				break
+    results = []
+    n_this_year_results = 0
 
-			except:
-				traceback.print_exc()
-				attempt = attempt + 1
-				if attempt <= max_attempts_per_page:
-					if verbose:
-						print("Exception. Starting attempt #", attempt, "and keeping at page #", page)
-				else:
-					page = page + 1
-					attempt = 1
-					if verbose:
-						print("Exception. All attempts exhausted for this page. Skipping to next page #", page)
+    url_default = "https://www.autotrader.co.uk/car-search"
+    # 
+    # Set up parameters for query to autotrader.co.uk
+    search_params = {"sort": "relevance",
+                     "postcode": postcode,
+                     "radius": radius,
+                     "make": make,
+                     "model": model,
+                     "ma": manufacturer_approved,
+                     "aggregatedTrim": model_variant,
+                     "search-results-price-type": "total-price",
+                     "search-results-year": "select-year",
+                     }
 
-	except KeyboardInterrupt:
-		pass
+    if include_writeoff == "include":
+        search_params["writeoff-categories"] = "on"
+    elif include_writeoff == "exclude":
+        search_params["exclude-writeoff-categories"] = "on"
+    elif include_writeoff == "writeoff-only":
+        search_params["only-writeoff-categories"] = "on"
 
-	return results
+    year = min_year
+    page = 1
+
+    try:
+        while year <= max_year:
+
+            search_params["year-from"] = year
+            search_params["year-to"] = year
+            logging.info(f"Year:     {year}\nPage:     {page}")
+
+            url = url_default
+            params = search_params
+
+            try:
+                while url:
+                    s = get_page_html(url, scraper, params=params, max_attempts_per_page=max_attempts_per_page)
+                    if s:
+                        articles = s.find_all("article", attrs={"data-standout-type": ""})
+                        next_page_object = s.find(attrs={"class": "pagination--right__active"})
+                    else:
+                        articles = []
+                        next_page_object = None
+
+                    for article in articles:
+                        car = get_car_details(article)
+                        results.append(car)
+                        n_this_year_results = n_this_year_results + 1
+
+                    if next_page_object:
+                        page = page + 1
+                        url = next_page_object['href']
+                        params = {}
+                        logging.info(f"Car count: {len(results)}")
+                        logging.info("---------------------------------")
+                    else:
+                        url = None
+                        logging.info(f"Found total {n_this_year_results} results for year {year} across {page} pages")
+
+            except KeyboardInterrupt:
+                break
+
+            # Increment year and reset relevant variables
+            year = year + 1
+            page = 1
+            n_this_year_results = 0
+
+            if year <= max_year:
+                logging.info(f"Moving on to year {year}")
+                logging.info("---------------------------------")
+
+    except KeyboardInterrupt:
+        pass
+
+    return results
+
 
 ### Output functions ###
 
-def save_csv(results = [], filename = "scraper_output.csv"):
-	csv_columns = ["name", "link", "price", "mileage", "BHP", "transmission", "fuel", "owners", "body", "ULEZ", "engine", "year"]
+def save_csv(results=None, filename="scraper_output.csv"):
+    csv_columns = ["name", "link", "price","subtitle","price-indicator","seller-info","mileage", "BHP", "transmission", "fuel", "owners", "body", "ULEZ",
+                   "engine", "year"]
+    if results:
+        with open(filename, "w", newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=csv_columns)
+            writer.writeheader()
+            for data in results:
+                writer.writerow(data)
 
-	with open(filename, "w", newline='') as f:
-		writer = csv.DictWriter(f, fieldnames=csv_columns)
-		writer.writeheader()
-		for data in results:
-			writer.writerow(data)
 
-def save_json(results = [], filename = "scraper_output.json"):
-	with open(filename, 'w') as f:
-		json.dump(results, f, sort_keys=True, indent=4, separators=(',', ': '))
+def save_json(results=None, filename="scraper_output.json"):
+    if results:
+        with open(filename, 'w') as f:
+            json.dump(results, f, sort_keys=True, indent=4, separators=(',', ': '))
